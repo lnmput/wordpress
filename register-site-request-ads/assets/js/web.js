@@ -27,6 +27,49 @@ jQuery(document).ready( function($) {
         });
     });
 
+    //清除缓存
+    $("#clean-cache").click(function(){
+        data="";
+        $.ajax({
+            type: "POST",
+            data: "color=" + data + "&action=yz_clear_cache",
+            url: ajax_object.ajax_url,
+            beforeSend: function() {
+                $("#clean-cache").html('清除中...');
+            },
+            success: function( data ) {
+                if(data==200){
+                    alert("缓存已清除");
+                }else{
+                    alert("缓存清除失败");
+                }
+            },
+            complete:function(){
+                $("#clean-cache").html('清除缓存');
+            }
+        });
+
+
+
+
+    });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     //后台修改链接
     $("#modify_btn").click(function () {

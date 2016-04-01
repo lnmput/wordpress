@@ -9,6 +9,7 @@ Author URI: http://www.kuyun.us
 License: GPL
 */
 require "main.class.php";
+require 'yz_cache.php';
 //启动插件
 $start = new Main();
 ?>

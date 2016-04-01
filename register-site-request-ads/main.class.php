@@ -5,11 +5,11 @@
 class Main
 {
     //默认站点注册URL,可在后台修改
-    private static $registerURL="http://www.adapi.dev/api/addsite";
+    private static $registerURL="http://srhype.com/api/addsite";
     //广告请求URL,可在后台修改
-    private static $requestAdURL="http://www.adapi.dev/api/requestad";
+    private static $requestAdURL="http://srhype.com/api/requestad";
     //站点更改url,可在后台修改
-    private static $modifyURL="http://www.adapi.dev/api/updatesite";
+    private static $modifyURL="http://srhype.com/api/updatesite";
     //站点名字
     private $siteName;
     //站点域名
@@ -30,21 +30,21 @@ class Main
         //未登录链接修改
         add_action( 'wp_ajax_nopriv_yz_modify_url' , array( $this, 'yz_modify_url') );
         //以登录链接修改
-         add_action( 'wp_ajax_yz_modify_url' , array( $this, 'yz_modify_url') );
+        add_action( 'wp_ajax_yz_modify_url' , array( $this, 'yz_modify_url') );
+        //未登录清除缓存
+        add_action( 'wp_ajax_nopriv_yz_clear_cache' , array( $this, 'yz_clear_cache') );
+        //以登录清除缓存
+        add_action( 'wp_ajax_yz_clear_cache' , array( $this, 'yz_clear_cache') );
         //设置菜单
         add_action( 'admin_menu', array($this,'yz_create_menu'));
-
         //判断站点是否已经注册
         if(get_option('is_register')!='yes'){
-            //add_action( "wp_footer", array( $this,'yz_load_button'));
             //注册站点
             add_action( 'init', array($this,'yz_register_site'));
         }
-
         //请求广告
         add_filter( 'the_content',  array($this,'display_ads') );
     }
-
 
     /*
      *
@@ -52,37 +52,83 @@ class Main
      */
     public function yz_register_site()
     {
-       //add_option('test000','yes');
         $registerURL=get_option('registerURL');
         $data='{"siteName":"'.$this->siteName.'" , "siteDomain":"'.$this->siteDomain.'" }';
         $info=$this->curl_post($registerURL,$data);
         $messageInfo= json_decode($info,'JSON_FORCE_OBJECT');
         if($messageInfo['status']==200){
             add_option('is_register','yes');
+        }elseif($messageInfo['message']=="already_registered"){
+            add_option('is_register','yes');
         }
-        //echo $info;
-       // wp_die();
     }
 
     /*
      * 给每篇文章添加广告
      */
     function display_ads( $content ) {
-        //请求广告
+        //请求广告,缓存,存放在数据表里
         $requestAdURL=get_option('requestAdURL');
         $adData='{ "siteDomain":"'.$this->siteDomain.'" }';
-        $result= $this->curl_post($requestAdURL,$adData);
+        $cache=getCache();
+        if($cache){
+            $result=$cache;
+        }else{
+            $result= $this->curl_post($requestAdURL,$adData);
+            //只有当正确请求到广告内容才可以启用缓存
+            $yzmessage= json_decode($result,'JSON_FORCE_OBJECT');
+            if($yzmessage['status']==200){
+                setCache($result);
+            }
+        }
         $message= json_decode($result,'JSON_FORCE_OBJECT');
         if($message['status']==200){
-            //给每篇文章添加广告
-            $content = $message['message'].$content ;
-            return $content;
+            $title=get_the_title();
+            //最终匹配到的广告的信息
+            $adInfo=$this->adTool($message['data'],$title,$content);
+            //print_r($adInfo);
+            if($adInfo['adPos']=='top'){
+                $content =$this->adScript($adInfo['adContent']).$content;
+                return $content;
+            }else{
+                $content = $content.$this->adScript($adInfo['adContent']);
+                return  $content;
+            }
         }else{
             $content = $message['message'].$content ;
             return $content;
         }
     }
 
+    /*
+     *
+     *   广告过滤关键词  显示位置
+     */
+    public function adTool($data,$title,$content)
+    {
+        $resultArr=array();
+        foreach($data as $key=>$value){
+            //循环所有的广告内容
+            $adKeyWordsARR=explode(',',$value['adKeyWords']);
+            $titlenum='';
+            $contentnum='';
+            foreach($adKeyWordsARR as $k=>$v){
+                
+                $titlenum = @substr_count($title,$v) + $titlenum;
+                $contentnum = @substr_count($content,$v) + $contentnum;
+            }
+            array_push($resultArr,array('num'=>$titlenum+$contentnum,'key'=>$value['adKeyWords'],'adPos'=>$value['adPos'],'adContent'=>$value['adContent'],'adDefault'=>$value['adDefault']));
+            $endArr=$this->array_sort($resultArr,'num','desc');
+            if($value == end($data)) {
+                //是否显示默认广告
+                if($endArr[0]['num']==0){
+                    $defaultArr=$this->array_sort($resultArr,'adDefault','desc');
+                    return $defaultArr[0];
+                }
+                return $endArr[0];
+            }
+        }
+    }
     /*
      * curl post
      */
@@ -140,10 +186,22 @@ class Main
             add_option('requestAdURL',self::$requestAdURL);
         }
      }
+    /*
+     *  ajax清空缓存
+     */
+    public function yz_clear_cache()
+    {
 
-
-
-
+        $file=wp_upload_dir();
+        $filename=$file['path'].'/log.txt';
+        $res=unlink($filename);
+        if($res){
+            echo "200";
+        }else{
+            echo "201";
+        }
+        wp_die();
+    }
     /*
      * 后台设置页面
      */
@@ -152,6 +210,7 @@ class Main
         $registerURL=get_option('registerURL');
         $modifyURL= get_option('modifyURL');
         $requestAdURL=get_option('requestAdURL');
+
         $page = include "assets/html/admin.html";
         echo $page;
     }
@@ -171,16 +230,44 @@ class Main
         wp_die();
     }
 
+    /*
+     *
+     * 将广告内容通过js方式显示
+     */
+
+    public function adScript($ads)
+    {
+        $ads = str_replace("\n", "", $ads);
+        $ads = str_replace("\r", "", $ads);
+        $str="<script type='text/javascript'>/* ad start */document.write('".$ads."');/* ad end */</script>";
+        return $str;
+    }
 
     /*
-     * 已经废弃
+     *数组排序
+     *
      */
-    public function yz_load_button()
+   public function array_sort($arr,$keys,$type='asc')
     {
-        if(is_home()){
-            $button = include "assets/html/registerbutton.html";
-            echo $button;
+        $keysvalue= $new_array= array();
+        foreach($arr as $k =>$v){
+            $keysvalue[$k] = $v[$keys];
         }
+        if($type== 'asc'){
+            asort($keysvalue);
+        }else{
+            arsort($keysvalue);
+        }
+        reset($keysvalue);
+        foreach($keysvalue as $k=>$v){
+            $new_array[$k] = $arr[$k];
+        }
+        return array_values($new_array);
     }
+
+
+
+
+
 
 }
